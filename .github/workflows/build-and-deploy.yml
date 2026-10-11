@@ -1,0 +1,60 @@
+name: SATC Website CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  validate:
+    name: Validate website
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Check required files
+        run: |
+          test -f index.html
+          test -f appspec.yml
+          test -f scripts/install_website.sh
+          echo "Required website and deployment files found."
+
+      - name: Basic HTML checks
+        run: |
+          grep -qi '<!DOCTYPE html>' index.html
+          grep -qi '</html>' index.html
+          echo "Basic HTML checks passed."
+
+  deploy:
+    name: Deploy to AWS
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-north-1
+
+      - name: Check SSM managed instances
+        run: |
+          aws ssm describe-instance-information \
+            --filters "Key=tag:Project,Values=SATC" \
+            --query "InstanceInformationList[*].[InstanceId,PingStatus]" \
+            --output table
+
+      - name: Deployment placeholder
+        run: |
+          echo "AWS authentication succeeded."
+          echo "Actual website deployment will be enabled after the SSM checks."
