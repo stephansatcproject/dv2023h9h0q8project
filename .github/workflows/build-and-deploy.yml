@@ -39,34 +39,65 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: eu-north-1
 
-      - name: Submit website deployment
+
+      - name: Deploy website with automatic rollback
         shell: bash
         run: |
           set -euo pipefail
 
-          COMMANDS=$(jq -n --arg url \
-            "https://raw.githubusercontent.com/stephansatcproject/dv2023h9h0q8project/main/index.html" \
-            '{
-              commands: [
-                "set -eu",
-                "mkdir -p /var/www/html",
-                ("curl --fail --silent --show-error --location " + ($url | @sh) + " -o /tmp/satc-index.html"),
-                "grep -qi \"<!DOCTYPE html>\" /tmp/satc-index.html",
-                "grep -qi \"</html>\" /tmp/satc-index.html",
-                "cp /var/www/html/index.html /var/www/html/index.html.bak 2>/dev/null || true",
-                "install -o root -g root -m 644 /tmp/satc-index.html /var/www/html/index.html",
-                "rm -f /tmp/satc-index.html",
-                "systemctl is-active --quiet httpd",
-                "curl --fail --silent --show-error http://localhost/ -o /dev/null",
-                "echo SATC website deployment and local health check succeeded"
-              ]
-            }')
+          REMOTE_SCRIPT=$(cat <<'SCRIPT'
+          set -eu
+
+          WEB_ROOT="/var/www/html"
+          BACKUP="$WEB_ROOT/index.html.bak"
+          TEMP_FILE="/tmp/satc-index.html"
+          URL="https://raw.githubusercontent.com/stephansatcproject/dv2023h9h0q8project/main/index.html"
+
+          # Download and validate the candidate before touching the live page.
+          curl --fail --silent --show-error --location "$URL" -o "$TEMP_FILE"
+          grep -qi '<!DOCTYPE html>' "$TEMP_FILE"
+          grep -qi '</html>' "$TEMP_FILE"
+
+          # Preserve the currently deployed version.
+          if [ ! -f "$WEB_ROOT/index.html" ]; then
+            echo "No current website exists to back up."
+            exit 1
+          fi
+
+          cp -p "$WEB_ROOT/index.html" "$BACKUP"
+
+          # Install the new page, then test Apache and the local response.
+          if install -o root -g root -m 644 "$TEMP_FILE" "$WEB_ROOT/index.html" \
+            && systemctl is-active --quiet httpd \
+            && curl --fail --silent --show-error http://localhost/ -o /dev/null; then
+            rm -f "$TEMP_FILE"
+            echo "Deployment and local health check succeeded."
+            exit 0
+          fi
+
+          echo "Deployment or health check failed. Restoring previous website."
+          cp -p "$BACKUP" "$WEB_ROOT/index.html"
+          rm -f "$TEMP_FILE"
+
+          if systemctl is-active --quiet httpd \
+            && curl --fail --silent --show-error http://localhost/ -o /dev/null; then
+            echo "Rollback succeeded. Previous website restored."
+          else
+            echo "WARNING: Previous page restored, but health check still fails."
+          fi
+
+          exit 1
+          SCRIPT
+          )
+
+          PARAMETERS=$(jq -n --arg cmd "$REMOTE_SCRIPT" \
+            '{commands: [$cmd]}')
 
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --targets "Key=tag:Project,Values=SATC" \
-            --parameters "$COMMANDS" \
-            --comment "Deploy SATC website from GitHub Actions" \
+            --parameters "$PARAMETERS" \
+            --comment "Deploy SATC website with rollback" \
             --query 'Command.CommandId' \
             --output text)
 
@@ -75,6 +106,7 @@ jobs:
           for attempt in $(seq 1 30); do
             INVOCATIONS=$(aws ssm list-command-invocations \
               --command-id "$COMMAND_ID" \
+              --details \
               --output json)
 
             COUNT=$(echo "$INVOCATIONS" | jq '.CommandInvocations | length')
@@ -101,9 +133,7 @@ jobs:
             sleep 10
           done
 
-          echo "Deployment did not complete successfully within 5 minutes."
+          echo "Deployment did not finish within 5 minutes."
           aws ssm list-command-invocations \
-            --command-id "$COMMAND_ID" \
-            --details \
-            --output json
+            --command-id "$COMMAND_ID" --details --output json
           exit 1
