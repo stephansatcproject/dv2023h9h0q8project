@@ -1,0 +1,14 @@
+
+version: 0.0
+os: linux
+
+files:
+  - source: /
+    destination: /var/www/html
+    overwrite: true
+
+hooks:
+  AfterInstall:
+    - location: scripts/install_website.sh
+      timeout: 60
+      runas: root
