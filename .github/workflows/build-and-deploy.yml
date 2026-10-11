@@ -137,3 +137,25 @@ jobs:
           aws ssm list-command-invocations \
             --command-id "$COMMAND_ID" --details --output json
           exit 1
+
+
+      - name: Verify website through Load Balancer
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          URL="http://stephanloadbal-822877877.eu-north-1.elb.amazonaws.com"
+
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --show-error "$URL" -o /tmp/satc-live.html \
+              && grep -qi "Building a more reliable" /tmp/satc-live.html; then
+              echo "Load Balancer health check passed."
+              exit 0
+            fi
+
+            echo "Waiting for the updated website..."
+            sleep 5
+          done
+
+          echo "Load Balancer health check failed."
+          exit 1
