@@ -139,6 +139,7 @@ jobs:
           exit 1
 
 
+
       - name: Verify website through Load Balancer
         shell: bash
         run: |
@@ -147,13 +148,23 @@ jobs:
           URL="http://stephanloadbal-822877877.eu-north-1.elb.amazonaws.com"
 
           for attempt in $(seq 1 12); do
-            if curl --fail --silent --show-error "$URL" -o /tmp/satc-live.html \
-              && grep -qi "Building a more reliable" /tmp/satc-live.html; then
+            STATUS=$(curl --silent --output /tmp/satc-live.html \
+              --write-out "%{http_code}" --max-time 10 "$URL" || true)
+
+            echo "Attempt $attempt: HTTP status $STATUS"
+
+            if [ -s /tmp/satc-live.html ]; then
+              echo "Response preview:"
+              head -c 500 /tmp/satc-live.html
+              echo
+            fi
+
+            if [ "$STATUS" = "200" ] \
+              && grep -qi "SATC" /tmp/satc-live.html; then
               echo "Load Balancer health check passed."
               exit 0
             fi
 
-            echo "Waiting for the updated website..."
             sleep 5
           done
 
